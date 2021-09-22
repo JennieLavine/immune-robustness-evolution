@@ -1,0 +1,22 @@
+---
+title: "phi-base_explore"
+author: "Jennie Lavine"
+date: "8/6/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+require(tidyverse)
+```
+Read in data from phi-base.  http://www.phi-base.org/termCondtion.htm
+```{r}
+getwd()
+dat <- read_csv('phi-base.csv')
+```
+```{r}
+getwd()
+innate_db <- read_tsv('innatedb_ppi.txt')
+```
+

@@ -1,0 +1,273 @@
+---
+title: "plotting_fitness_landscapes"
+author: "Jennie Lavine"
+date: "8/16/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=F, warning=F, results=F}
+#!/usr/bin/env Rscript
+
+
+library(RSQLite)
+
+
+generate_table_names = function(x){paste('output_mat', x, '.sqlite', sep='')}
+
+generate_summaryTable = function(mat_id, full=FALSE) {
+  #getwd()
+  #setwd('Results_Aug_27')
+  table_name = generate_table_names(mat_id)
+  db <- dbConnect(SQLite(), paste("Results_Aug_27/",table_name, sep=''))
+  #print(db)
+  #print(dbListTables(db))
+  metaTable <- dbReadTable(db, "meta")
+  edgesTable <- dbReadTable(db, "edges")
+  summaryTable <- dbReadTable(db, "summary")
+  
+  if(full==TRUE){
+  # Initialize S0, C0
+  n_receptors <- metaTable$n_receptors
+  n_effectors <- metaTable$n_effectors
+  S0 <- matrix(FALSE, nrow = n_receptors, ncol = n_effectors)
+  C0 <- matrix(0.0, nrow = n_receptors, ncol = n_effectors)
+  for (i in 1:nrow(edgesTable)) {
+    stopifnot(edgesTable$id[i] == 0)
+    S0[edgesTable$receptor[i], edgesTable$effector[i]] = TRUE
+    C0[edgesTable$receptor[i], edgesTable$effector[i]] = edgesTable$weight[i]
+  }
+  
+  # Reconstruct a list mapping matrix ID to (matrix, fitness) pairs
+  all_matrices <- list()
+  
+  for (i in 1:nrow(summaryTable)) {
+    id <- summaryTable$id[i]
+    cat(sprintf("Processing id %d...\n", id))
+    if (id == 0) {
+      all_matrices[["0"]] <-
+        list(S = S0, fitness = summaryTable$fitness[i])
+    }
+    else {
+      parent_id <- summaryTable$parent_id[i]
+      S <- all_matrices[[as.character(parent_id)]]$S
+      S[summaryTable$removed_receptor[i], summaryTable$removed_effector[i]] <-
+        FALSE
+      fitness <- summaryTable$fitness[i]
+      all_matrices[[as.character(id)]] <-
+        list(S = S, fitness = fitness)
+    }
+  }
+  
+  summaryTable$n_edges <- 0
+  
+  for (i in 1:length(all_matrices)) {
+    summaryTable$n_edges[i] <- sum(all_matrices[[i]]$S)
+  }
+  return(list(summaryTable, all_matrices))
+  }
+  else{
+    return(summaryTable)
+  }
+}
+
+summaryTable
+
+#plot(jitter(summaryTable$n_edges), summaryTable$fitness, ylim=c(1,3))
+
+# Do something with all this
+
+```
+
+
+
+```{r}
+combos=0
+max_edges = 28
+min_edges = 25
+for(i in min_edges:max_edges){
+  combos = combos + factorial(max_edges)/
+    (factorial(i)*factorial(max_edges-i))
+}
+combos
+combos - nrow(summaryTable)
+```
+
+```{r}
+n_edges_vec <-  unique(summaryTable$n_edges)
+sum_stats <- as.data.frame(matrix(NA, nrow=length(n_edges_vec), ncol=4))
+colnames(sum_stats) <- c('n_edges', 'mean', 'sd', 'max')
+sum_stats$n_edges <- n_edges_vec
+
+for (i in 1:length(n_edges_vec)){
+  sum_stats$mean[i] <- mean(summaryTable$fitness[
+    summaryTable$n_edges == n_edges_vec[i]])
+  sum_stats$sd[i] <- sd(summaryTable$fitness[
+    summaryTable$n_edges == n_edges_vec[i]])
+  sum_stats$max[i] <- max(summaryTable$fitness[
+    summaryTable$n_edges == n_edges_vec[i]])
+  
+}
+
+plot(sum_stats$n_edges, sum_stats$mean, ylim=c(1.5,2.25))
+points(sum_stats$n_edges, sum_stats$mean-1.96*sum_stats$sd, col=2)
+points(sum_stats$n_edges, sum_stats$mean+1.96*sum_stats$sd, col=2)
+points(sum_stats$n_edges, sum_stats$max, col=3)
+
+```
+
+
+```{r}
+#hist(summaryTable$fitness[summaryTable$parent_id==0])
+#abline(v=summaryTable$fitness[1])
+
+
+calculate_dead_ends = function(mat_ids, alpha, max_edges_removed) {
+   col_names = c('mat_id', 'alpha', 
+                paste(c('n_paths_', 'n_deadends_'), rep(1:max_edges_removed, each=2), sep='')
+    )
+  res = matrix(NA, nrow=length(mat_ids), ncol=length(col_names))
+  colnames(res) = col_names
+  res<-as.data.frame(res)
+  n_mat = 1
+  for(matID in mat_ids){
+    print(paste('starting mat ID', matID))
+    dat = generate_summaryTable(matID, full=FALSE)
+    
+    res$mat_id[n_mat] = matID
+    res$alpha[n_mat] = alpha
+    
+    parent = 0
+    for (i in 1:max_edges_removed){
+      if(parent==0){
+       fit.ind = which(dat$parent_id == parent &
+                          dat$fitness > (1-alpha)*dat$fitness[dat$id == parent])
+        fit.ids = dat$id[fit.ind]
+        n_fit_ids = length(fit.ids)
+        res[n_mat, grep(i, col_names)] = c(length(fit.ids), sum(fit.ids==0))
+        parent=parent+1
+      }
+      else {
+        
+        fit.gene = list(NULL)
+       for (j in 1:n_fit_ids) {
+         if(length(fit.ids)==0){break}
+         parent = fit.ids[j]
+         fit.gene[[j]] = dat$id[which(dat$parent_id == parent &
+                            dat$fitness > (1-alpha)*dat$fitness[dat$id == parent])]
+        }
+        fit.ids = unlist(fit.gene)
+        n_fit_ids = length(fit.ids)
+        n_deadends = sum(unlist(lapply(fit.gene, length)) == 0)
+        res[n_mat, grep(i, col_names)] = c(length(fit.ids), n_deadends)
+      }
+      if(length(fit.ids)==0){break}
+    }
+    print(n_mat)
+    n_mat = n_mat+1
+  }
+ return(res) 
+}
+```
+
+
+```{r}
+
+#original vec
+#high_redun_ind = c( 364 ,  2  ,28,  94, 437, 445, 510, 646, 802,   50,  57,  66,  74 ,216, 305, 341, 455, 481)
+
+high_redun_ind = c( 364 ,  2  , 94,   50,  57,  66,  74 ,216, 305, 341, 455, 481)
+low_redun_ind = c(347, 373, 381, 541, 561, 617, 677, 709, 798, 824, 841, 844, 850, 910 ,953 ,977)
+
+mat_ids = c(high_redun_ind, low_redun_ind)
+
+
+
+res = calculate_dead_ends(mat_ids=mat_ids, alpha=0, max_edges_removed=3)
+
+for(alpha_val in c(0.001, 0.01)){
+  res=rbind(res, calculate_dead_ends(mat_ids=mat_ids, alpha=alpha_val, max_edges_removed=3))
+}
+
+
+```
+
+```{r}
+###calculating statistics re ruggedness and fitness landscape
+
+res$deadend_ratio2 = res$n_deadends_2/res$n_paths_1
+res$deadend_ratio3 = res$n_deadends_3/res$n_paths_2
+
+res$redundancy [is.element(res$mat_id, high_redun_ind)] = 'high'
+res$redundancy [is.element(res$mat_id, low_redun_ind)] = 'low'
+
+high_redun_ordered <- as.factor(as.character(high_redun_ind), levels=high_redun_ind)
+
+plot(res$mat_id[res$alpha==0], res$deadend_ratio2[res$alpha==0], col=as.factor(res$redundancy[res$alpha==0.001]))
+
+plot(res$mat_id[res$alpha==0], res$deadend_ratio2[res$alpha==0], col=as.factor(res$redundancy[res$alpha==0]))
+
+
+
+points(res$mat_id[res$alpha==0 & is.element(res$mat_id, c(364, 2))], res$deadend_ratio2[res$alpha==0 & is.element(res$mat_id, c(364, 2))], col='purple', pch=2)
+
+
+
+```
+
+
+
+```{r}
+high_redun_mean = mean(res$deadend_ratio2[res$redundancy=='high' & res$alpha==0.001], na.rm=T)
+high_redun_sd = sd(res$deadend_ratio2[res$redundancy=='high' & res$alpha==0.001], na.rm=T)
+high_redun_ci = c(high_redun_mean - 1.96 * high_redun_sd, high_redun_mean + 1.96 * high_redun_sd)
+
+low_redun_mean = mean(res$deadend_ratio2[res$redundancy=='low' & res$alpha==0.001], na.rm=T)
+low_redun_sd = sd(res$deadend_ratio2[res$redundancy=='low' & res$alpha==0.001], na.rm=T)
+low_redun_ci = c(low_redun_mean - 1.96 * low_redun_sd, low_redun_mean + 1.96 * low_redun_sd)
+
+```
+
+
+
+```{r}
+fit.2gene.ids = unlist(fit.2gene)
+  n_deadEnds2 = sum(unlist(lapply(fit.2gene, length)) == 0)
+  prop_deadEnds2 = n_deadEnds2 / length(fit.2gene.ids)
+   
+      n_mat = n_mat+1
+    
+  
+  fit.2gene = list()
+  for (i in 1:length(fit.1gene.ids)) {
+    parent = fit.1gene.ids[i]
+    fit.2gene[[i]] = 
+      dat$id[which(dat$parent_id == parent &
+                            dat$fitness > dat$fitness[dat$id == parent])]
+  }
+  
+  fit.2gene.ids = unlist(fit.2gene)
+  n_deadEnds2 = sum(unlist(lapply(fit.2gene, length)) == 0)
+  prop_deadEnds2 = n_deadEnds2 / length(fit.2gene.ids)
+  
+  fit.3gene = list()
+  for (i in 1:length(fit.2gene.ids)) {
+    parent = fit.2gene.ids[i]
+    fit.3gene[[i]] = dat$id[which(dat$parent_id == parent &
+                                             dat$fitness > dat$fitness[dat$id ==
+                                                                                           parent])]
+  }
+  
+  fit.3gene.ids = unlist(fit.3gene)
+  n_deadEnds3 = sum(unlist(lapply(fit.3gene, length)) == 0)
+  prop_deadEnds3 = n_deadEnds3 / length(fit.3gene.ids)
+  
+  
+}
+
+
+```
+

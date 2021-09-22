@@ -1,0 +1,270 @@
+---
+title: "Graph redundancy stats"
+author: "Jennie Lavine"
+date: "8/26/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=F)
+```
+
+```{r}
+require(tidyverse)
+```
+
+```{r}
+graph_stats = read_tsv("graph_stats.txt", col_names=F)
+#graph_stats_old = read_tsv("graph_stats_old.txt", col_names=F)
+colnames(graph_stats) = c("n_receptors", "n_effectors",
+        "bot_degeneracy", "bot_dens_net",
+        "bot_mean_deg", "bot_sd_deg",
+        "bot_n_modules", "bot_modularity_net",
+        "bot_mean_path_length", "bot_sd_path_length",
+        "bip_degeneracy", "bip_dens_net", "bip_mean_deg", "bip_sd_deg",
+        "bip_n_modules", "bip_modularity_net", "bot_skew_deg", "bip_skew_deg")
+
+redundancy_stats = read_tsv("redundancy_stats.txt", col_names=F)
+colnames(redundancy_stats) = paste("orphans_", 0:(ncol(redundancy_stats)-1), sep='')
+
+graph_stats$orphans_3 = redundancy_stats$orphans_3
+graph_stats$orphans_4 = redundancy_stats$orphans_4
+
+graph_stats$n_connections = graph_stats$bip_dens_net * 8 * 16
+graph_stats$ID = 1:1000
+
+ind = which.max(table(graph_stats$n_connections))
+graph_stats_28 <- subset(graph_stats, 
+                    graph_stats$n_connections==as.numeric(names(ind)))
+```
+
+
+Test for association between orphans 4 and other variable
+
+```{r}
+
+linmod <- lm(data = graph_stats_28, formula = log(orphans_4) ~ bot_mean_path_length + bip_modularity_net + bip_n_modules + bot_dens_net + bot_modularity_net + bot_n_modules + bip_dens_net + bot_sd_deg + bip_sd_deg + bot_skew_deg + bip_skew_deg + bip_mean_deg + bot_mean_deg)
+
+bestmod = step(linmod)
+bestmod
+
+var_cov_bestmod = vcov(bestmod)
+round(cov2cor(var_cov_bestmod), 3)
+
+```
+
+
+```{r}
+coef_names <- tail(names(bestmod$coefficients), -1)
+for (coef in coef_names){
+    temp_x = unlist(graph_stats_28[,coef])
+  plot(jitter(temp_x), log(graph_stats_28$orphans_4)
+       , xlab=coef)
+  hist(temp_x)
+}
+```
+
+Using top 4 predictors by AIC value
+```{r}
+linmod <- lm(data = graph_stats_28, formula = log(orphans_4) ~  bip_sd_deg + bip_skew_deg + bot_dens_net + bot_sd_deg)
+
+bestmod = step(linmod)
+bestmod
+```
+
+
+The only monotonic relationships are with regard to the spread and skewness of the degree distribution and perhaps bottom modularity.  Everything else seems to either be unrelated for have an intermediate optimum.  We next generate a linear model with 
+
+
+```{r}
+linmod <- lm(data = graph_stats_28, formula = log(orphans_4) ~  bot_sd_deg + bip_sd_deg + bot_skew_deg + bip_skew_deg + bot_modularity_net)
+
+bestmod = step(linmod)
+bestmod
+```
+
+
+
+How strongly related are these predictors with each other?
+
+```{r}
+var_cov_bestmod = vcov(bestmod)
+cov2cor(var_cov_bestmod)
+cor.test(graph_stats_28$bot_skew_deg, graph_stats_28$bot_sd_deg)
+cor.test(graph_stats_28$bot_skew_deg, graph_stats_28$bip_skew_deg)
+cor.test(graph_stats_28$bot_sd_deg, graph_stats_28$bip_sd_deg)
+cor.test(graph_stats_28$bip_skew_deg, graph_stats_28$bip_sd_deg)
+
+
+
+```
+
+
+
+Now let's pull out graphs that had especially high and low redundancy and see where they fall in the above, then we will go back to Julia and visualize them.
+
+```{r}
+ids_ordered = graph_stats_28$ID[order(graph_stats_28$orphans_4)]
+high_redun_ids = head(ids_ordered, 20)
+low_redun_ids = tail(ids_ordered, 20)
+    
+```
+
+
+If we include all the results (i.e., regardless of # of connections), what do we find?
+
+```{r}
+linmod <- lm(data = graph_stats, formula = log(orphans_4+0.1) ~ bip_dens_net + bot_sd_deg + bip_sd_deg + bot_skew_deg + bip_skew_deg)
+
+bestmod = step(linmod, trace=0)
+bestmod
+
+var_cov_bestmod = vcov(bestmod)
+round(cov2cor(var_cov_bestmod), 3)
+
+```
+
+
+Conclusions thus far:
+The shape of the degree distribution is the strongest predictor of redundancy as measured by the frequency of networks with three or four orphan effector after removing all combinations of four edges.
+
+The skewness of the bipartite graph is a stronger predictor (AIC values from various 'step's) than the skewness of the bottom projection.  They go in opposite directions -- a high positive skewness (i.e., long right tail) of the bipartite graph is associated with higher redundancy (i.e., fewer 4-orphans); in contrast, a lower skewness (closer to 0, in this case, also includes negative numbers, maybe should try with magnitude instead?) of the bottom projection is associated with higher redundancy.  Smaller variances in both are associated with higher redundancy, though for the more skewed distributions, the metric of variance may not be very useful.  This is in line with the notion of a power-law degree distribution in the bipartite network leading to a more robust system.
+
+As expected given the opposing results above, the skewness of the bipartite graph and bottom projection are negatively correalted.  The bottom and bipartite sd's are strongly positively correlated, which leads me to consider the possibility that the sd of the bipartite graph may not be important
+
+
+
+I now include plots of a few of the particularly high and low redundancy graphs and some associated metrics.
+
+
+## High redundancy graphs 
+![High redundancy](network_2_high_redundancy.png)
+
+
+![High redundancy](network 28 high redundancy.png)
+
+
+
+![High redundancy](network 94 high redundancy.png)
+
+![High redundancy](network 364 high redundancy.png)
+
+![High redundancy](network 437 high redundancy.png)
+
+![High redundancy](network 445 high redundancy.png)
+
+![High redundancy](network 510 high redundancy.png)
+
+![High redundancy](network 646 high redundancy.png)
+
+![High redundancy](network 802 high redundancy.png)
+
+
+
+## Low redundancy graphs
+
+![Low redundancy](network 19 low redundancy.png)
+
+
+![Low redundancy](network 223 low redundancy.png)
+
+![Low redundancy](network 438 low redundancy.png)
+
+![Low redundancy](network 679 low redundancy.png)
+
+
+
+
+<!-- ```{r} g = ggplot(data=graph_stats, aes(x=bip_dens_net, y=bip_modularity_net)) g -->
+<!-- + geom_point() ``` -->
+<!-- Low density is associated with strong clustering (high modularity) of the -->
+<!-- bipartite network. -->
+<!-- ```{r} g = ggplot(data=graph_stats, aes(x=bot_dens_net, y=bip_modularity_net)) g -->
+<!-- + geom_point() ``` -->
+<!-- ```{r} g = ggplot(data=graph_stats, aes(x=bip_dens_net, y=bip_n_modules)) g + -->
+<!-- geom_point() ``` Density is only mildly associated with the number of modules -- -->
+<!-- having very low density tends to preclude having very few modules, and having -->
+<!-- very high density tends to preclude having very many modules. -->
+<!-- ```{r} g = ggplot(data=graph_stats, aes( x=bip_dens_net, -->
+<!-- y=bot_mean_path_length)) g + geom_point() ``` -->
+<!-- ```{r} linmod <- lm(data = graph_stats, formula = orphans_3 ~ -->
+<!-- bot_mean_path_length + bip_dens_net + bip_modularity_net + bip_n_modules + -->
+<!-- bot_dens_net + bot_modularity_net + bot_n_modules) -->
+<!-- bestmod = step(linmod, trace=0) bestmod ``` -->
+<!-- Do analysis on subset of simulations that have modal density (i.e., same number -->
+<!-- of connections as each other, which is modal # of connections) ```{r} ind = -->
+<!-- which.max(table(graph_stats$n_connections)) graph_stats_28 <- -->
+<!-- subset(graph_stats, graph_stats$n_connections==as.numeric(names(ind))) -->
+<!-- ``` -->
+<!-- ```{r} linmod <- lm(data = graph_stats_28, formula = orphans_4 ~ -->
+<!-- bot_mean_path_length + bip_modularity_net + bip_n_modules + bot_dens_net + -->
+<!-- bot_modularity_net + bot_n_modules) -->
+<!-- bestmod = step(linmod, trace=0) bestmod ``` -->
+<!-- How does having few connections affect this? ```{r} g <- -->
+<!-- ggplot(data=graph_stats, aes(x=n_connections, y=orphans_4)) g + geom_point() + -->
+<!-- scale_y_continuous(trans='sqrt') ``` -->
+<!-- Do these relationships hold for low density graphs? ```{r} graph_stats_23 <- -->
+<!-- subset(graph_stats, graph_stats$n_connections==23) linmod <- lm(data = -->
+<!-- graph_stats_23, formula = orphans_4 ~ bot_mean_path_length + bip_modularity_net -->
+<!-- + bip_n_modules + bot_dens_net + bot_modularity_net + bot_n_modules) -->
+<!-- bestmod = step(linmod) bestmod ``` -->
+<!-- ```{r} graph_stats_32 <- subset(graph_stats, graph_stats$n_connections==32) -->
+<!-- linmod <- lm(data = graph_stats_32, formula = orphans_4 ~ bot_mean_path_length + -->
+<!-- bip_modularity_net + bip_n_modules + bot_dens_net + bot_modularity_net + -->
+<!-- bot_n_modules) -->
+<!-- bestmod = step(linmod) bestmod ``` -->
+<!-- ```{r} graph_stats_center <- subset(graph_stats, graph_stats$n_connections<=30 & -->
+<!-- graph_stats$n_connections >=27) linmod <- lm(data = graph_stats_center, formula -->
+<!-- = orphans_3 ~ bot_mean_path_length + bip_modularity_net + bip_n_modules + -->
+<!-- bot_dens_net + bot_modularity_net + bot_n_modules + bip_dens_net) -->
+<!-- bestmod = step(linmod) bestmod ``` -->
+<!-- Summary thoughts on the above results: -->
+<!-- 1. Characteristics of both the bottom projection and the original bipartite -->
+<!-- graph contribute to redundancy, therefore just considering the bottom projection -->
+<!-- is NOT enough. -->
+<!-- 2. The most consistent covariates, all of which are positively associated with -->
+<!-- the degree of redundancy (i.e., negatively associated with the number of ways -->
+<!-- you can achieve 3 or 4 orphans) are as follows: -->
+<!-- (a. Mean shortest path length in the bottom projection.  Having to travel -->
+<!-- through more nodes in the network increases the distributed redundancy.  One -->
+<!-- could explain this as allowing for more easy redistribution of resources) -- -->
+<!-- this one is more ambiguous -->
+<!-- b. Modularity of the bipartite graph.  Having strong connections within modules -->
+<!-- (and weaker connections between modules) leads to higher redundancy.  This is a -->
+<!-- metric that is related to the shape of the degree distribution I believe... -->
+<!-- Check on this.  Interestingly, this is only consistent for the modularity of the -->
+<!-- bipartite graph.  For the bottom projection, the relationship between modularity -->
+<!-- and redundancy holds with bottom projections of graphs with average or fewer -->
+<!-- than average connections, but changes sign for graphs with very many -->
+<!-- connections. -->
+<!-- c. Density of the bottom projection.  Graphs with the same number of connections -->
+<!-- in the bipartite graph do not necessarily have the same number of connections in -->
+<!-- the bottom projection.  For a given bipartite density, having a bottom -->
+<!-- projection with more connections is associated with higher redundancy. -->
+<!-- d. higher standard deviation in the degree distribution. -->
+<!-- ```{r} g = ggplot(data=graph_stats, aes(x=bip_modularity_net, y=orphans_4)) g  + -->
+<!-- geom_point() + scale_y_continuous() ``` -->
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- What best predicts mean path length? -->
+
+<!-- ```{r} -->
+<!-- linmod = lm(data = graph_stats, formula = bot_mean_path_length ~ bip_dens_net + bip_modularity_net + bip_n_modules + bot_dens_net + bot_modularity_net + bot_n_modules) -->
+
+<!-- bestmod = step(linmod) -->
+<!-- ``` -->
